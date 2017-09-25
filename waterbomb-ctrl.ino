@@ -2,13 +2,13 @@
 #include <TM1637Display.h>
 
 #define BUTTON_PIN        2  // Button
-#define RELAY_OUT_PIN     3  // RELAY
+#define RELAY_OUT_PIN     3  // To relay
 #define CLK               4
 #define DIO               5
 #define DELAY            20  // Delay per loop in ms
 
 const unsigned int ONE_SECOND = 1000; // 1 second
-const unsigned int TEN_SECONDS = 10 * ONE_SECOND; // 1 minute
+const unsigned int TEN_SECONDS = 10 * ONE_SECOND; // 10 seconds
 const unsigned int ONE_MINUTE = 60 * ONE_SECOND; // 1 minute
 
 int counter_addr = 0;
@@ -36,7 +36,6 @@ void print_to_display(int number) {
 }
 
 void setup() {
-  Serial.begin(9600);
   display.setBrightness(0x0f);
 
   pinMode(BUTTON_PIN, INPUT);
@@ -46,8 +45,6 @@ void setup() {
 
   minutes_left = EEPROM.read(counter_addr);
   print_to_display(minutes_left);
-
-  Serial.println(minutes_left);
   
   if (minutes_left > 0) {
     digitalWrite(RELAY_OUT_PIN, HIGH);
@@ -60,12 +57,8 @@ void loop() {
   boolean raising_edge = handle_button();
 
   if (raising_edge) {
-    Serial.print("\n## Pushed button");
-    Serial.print("\n After: ");
-    Serial.print(minutes_left);
     minutes_left += 0x05;
-    Serial.print(", Before: ");
-    Serial.print(minutes_left);
+    
     EEPROM.write(counter_addr, minutes_left);
 
     print_to_display(minutes_left);

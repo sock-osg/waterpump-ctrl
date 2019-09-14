@@ -1,3 +1,65 @@
+#define DEFAULT_LONGPRESS_LEN    25  // Min nr of loops for a long press
+#define DELAY                    20  // Delay per loop in ms
+
+//////////////////////////////////////////////////////////////////////////////
+
+enum { EV_NONE = 0, EV_SHORTPRESS, EV_LONGPRESS };
+enum { SETUP_24_HOURS_MODE = 1, SETUP_HOUR, SETUP_MINUTES, SETUP_ALARM, SETUP_AL_HOUR, SETUP_AL_MINUTES, SETUP_SET_ALARM };
+
+unsigned char setupCounter = 0;
+
+//////////////////////////////////////////////////////////////////////////////
+// Class definition
+
+class ButtonHandler {
+
+  public:
+    // Constructor
+    ButtonHandler(int pin, int longpress_len = DEFAULT_LONGPRESS_LEN);
+
+    // Initialization done after construction, to permit static instances
+    void init();
+
+    // Handler, to be called in the loop()
+    int handle();
+
+  protected:
+    boolean was_pressed;     // previous state
+    int pressed_counter;     // press running duration
+    const int pin;           // pin to which button is connected
+    const int longpress_len; // longpress duration
+};
+
+ButtonHandler::ButtonHandler(int p, int lp) : pin(p), longpress_len(lp) { }
+
+void ButtonHandler::init() {
+  pinMode(pin, INPUT);
+  digitalWrite(pin, HIGH); // pull-up
+  was_pressed = false;
+  pressed_counter = 0;
+}
+
+int ButtonHandler::handle() {
+  int event;
+  boolean now_pressed = digitalRead(pin);
+
+  if (!now_pressed && was_pressed) {
+    // handle release event
+    event = pressed_counter < longpress_len ? EV_SHORTPRESS : EV_LONGPRESS;
+  } else {
+    event = EV_NONE;
+  }
+
+  // update press running duration
+  pressed_counter = now_pressed ? pressed_counter + 1 : 0;
+
+  // remember state, and we're done
+  was_pressed = now_pressed;
+  return event;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 #include <EEPROM.h>
 #include <TM1637Display.h>
 
@@ -14,22 +76,11 @@ const unsigned int ONE_MINUTE = 60 * ONE_SECOND; // 1 minute
 int counter_addr = 0;
 byte minutes_left = 0;
 
-// Variables
-boolean button_was_pressed; // previous state
-
 // time controls
 unsigned long init_time;
 
 TM1637Display display(CLK, DIO);
-
-boolean handle_button() {
-  boolean event;
-  int button_now_pressed = !digitalRead(BUTTON_PIN); // pin low -> pressed
-
-  event = button_now_pressed && !button_was_pressed;
-  button_was_pressed = button_now_pressed;
-  return event;
-}
+ButtonHandler btn_control(BUTTON_PIN);
 
 void print_to_display(int number) {
   display.showNumberDec(number);
@@ -38,10 +89,8 @@ void print_to_display(int number) {
 void setup() {
   display.setBrightness(0x0f);
 
-  pinMode(BUTTON_PIN, INPUT);
+  btn_control.init();
   pinMode(RELAY_OUT_PIN, OUTPUT);
-
-  button_was_pressed = false;
 
   minutes_left = EEPROM.read(counter_addr);
   print_to_display(minutes_left);
@@ -49,22 +98,31 @@ void setup() {
   if (minutes_left > 0) {
     digitalWrite(RELAY_OUT_PIN, HIGH);
   }
-  digitalWrite(BUTTON_PIN, HIGH);
 }
 
 void loop() {
   // handle button
-  boolean raising_edge = handle_button();
+  int event = btn_control.handle();
 
-  if (raising_edge) {
-    minutes_left += 0x05;
-    
-    EEPROM.write(counter_addr, minutes_left);
-
-    print_to_display(minutes_left);
-    digitalWrite(RELAY_OUT_PIN, HIGH);
-    init_time = millis();
+  switch(event) {
+    case EV_LONGPRESS:
+      minutes_left = 0x00;
+      
+      EEPROM.write(counter_addr, minutes_left);
+  
+      print_to_display(minutes_left);
+      break;
+    case EV_SHORTPRESS:
+      minutes_left += 0x02;
+      
+      EEPROM.write(counter_addr, minutes_left);
+  
+      print_to_display(minutes_left);
+      digitalWrite(RELAY_OUT_PIN, HIGH);
+      init_time = millis();
+      break;
   }
+
   if (minutes_left == 0x00 && digitalRead(RELAY_OUT_PIN)) {
     digitalWrite(RELAY_OUT_PIN, LOW);
   }
@@ -82,4 +140,3 @@ void loop() {
 
   delay(DELAY);
 }
-

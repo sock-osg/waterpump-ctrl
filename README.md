@@ -2,7 +2,9 @@
 
 ## Dependencies
 
-
+* https://github.com/avishorp/TM1637
+* https://github.com/sock-osg/ButtonHandler
+* https://pubsubclient.knolleary.net/
 
 ## References
 

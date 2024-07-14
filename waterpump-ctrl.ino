@@ -4,8 +4,8 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 
-const char* ssid = "YOUR_SSID";
-const char* password = "WIFI_PASSWORD";
+#include "Credentials.h"
+
 const char* mqtt_server = "MQTT_SERVER";
 const char* STATUS_TOPIC = "STATUS_TOPIC";
 const char* TIMMER_TOPIC = "TIMMER_TOPIC";

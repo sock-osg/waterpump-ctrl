@@ -4,12 +4,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 
-const char* ssid = "YOUR_SSID";
-const char* password = "WIFI_PASSWORD";
-const char* mqtt_server = "MQTT_SERVER";
-const char* STATUS_TOPIC = "STATUS_TOPIC";
-const char* TIMMER_TOPIC = "TIMMER_TOPIC";
-const char* DEVICE_ID = "DEVICE_ID";
+#include "Credentials.h"
 
 #define CLK               4   // D2
 #define DIO               5   // D1
@@ -135,7 +130,7 @@ void setup() {
 
   wifi_connect();
 
-  mqtt_client.setServer(mqtt_server, 1883);
+  mqtt_client.setServer(mqttServer, mqttPort);
   mqtt_client.setCallback(callback);
 }
 

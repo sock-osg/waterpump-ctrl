@@ -22,6 +22,7 @@ bool wifi_connecting = false;
 const unsigned int ONE_SECOND = 1000; // 1 second
 const unsigned int TEN_SECONDS = 10 * ONE_SECOND; // 10 seconds
 const unsigned int ONE_MINUTE = 60 * ONE_SECOND; // 1 minute
+const unsigned int STATUS_UPDATE_INTERVAL = 5000; // 5 seconds
 
 int counter_addr = 0;
 byte minutes_left = 0;
@@ -29,6 +30,7 @@ byte prev_minutes_left = 0;
 
 // time controls
 unsigned long init_time;
+unsigned long lastStatusUpdateTime = 0;
 
 TM1637Display display(CLK, DIO);
 ButtonHandler btn_control(BUTTON_PIN);
@@ -176,6 +178,15 @@ void loop() {
       print_save_and_publish(minutes_left);
 
       digitalWrite(RELAY_OUT_PIN, HIGH);
+    }
+  }
+
+  // Periodic status updates
+  if (wifi_connected && mqtt_connected) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastStatusUpdateTime >= STATUS_UPDATE_INTERVAL) {
+      lastStatusUpdateTime = currentMillis;
+      mqtt_client.publish(STATUS_TOPIC, String(minutes_left).c_str());
     }
   }
 

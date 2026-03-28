@@ -2,7 +2,7 @@
 #include <TM1637Display.h>
 #include <ButtonHandler.h>
 #include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+#include <ESP8266WebServer.h>
 
 #include "Credentials.h"
 
@@ -11,18 +11,14 @@
 #define RELAY_OUT_PIN     12  // D6
 #define BUTTON_PIN        13  // D7
 #define WIFI_INDICATOR    14  // D5
-#define MQTT_INDICATOR    15  // D8
 
 #define DELAY            20  // Delay per loop in ms
 
 bool wifi_connected = false;
-bool mqtt_connected = false;
 bool wifi_connecting = false;
 
 const unsigned int ONE_SECOND = 1000; // 1 second
-const unsigned int TEN_SECONDS = 10 * ONE_SECOND; // 10 seconds
 const unsigned int ONE_MINUTE = 60 * ONE_SECOND; // 1 minute
-const unsigned int STATUS_UPDATE_INTERVAL = 5000; // 5 seconds
 
 int counter_addr = 0;
 byte minutes_left = 0;
@@ -30,35 +26,151 @@ byte prev_minutes_left = 0;
 
 // time controls
 unsigned long init_time;
-unsigned long lastStatusUpdateTime = 0;
+unsigned long lastClientUpdateTime = 0;
+const unsigned long CLIENT_UPDATE_INTERVAL = 5000; // Update client every 5 seconds
 
 TM1637Display display(CLK, DIO);
 ButtonHandler btn_control(BUTTON_PIN);
-WiFiClient espClient;
-PubSubClient mqtt_client(espClient);
+ESP8266WebServer server(80);
 
 void print_save_and_publish(int number) {
   EEPROM.write(counter_addr, number);
   EEPROM.commit();
-
-  if (mqtt_connected) {
-    mqtt_client.publish(STATUS_TOPIC, String(number).c_str());
-  }
-
   display.showNumberDec(number);
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  payload[length] = '\0'; // Make payload a string by NULL terminating it.
-  int newMinutes = atoi((char *) payload);
+// HTML page with input field
+String getHtmlPage() {
+  String html = "<!DOCTYPE html>";
+  html += "<html>";
+  html += "<head>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<title>Timer Control</title>";
+  html += "<style>";
+  html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }";
+  html += ".timer { font-size: 150px; margin: 20px; padding: 20px; background: #f0f0f0; border-radius: 10px; }";
+  html += "input { font-size: 24px; padding: 10px; margin: 10px; width: 150px; text-align: center; }";
+  html += "button { font-size: 24px; margin: 10px; padding: 10px 20px; cursor: pointer; }";
+  html += ".set-button { background-color: #4CAF50; color: white; border: none; border-radius: 5px; }";
+  html += ".reset-button { background-color: #f44336; color: white; border: none; border-radius: 5px; }";
+  html += "button:hover { opacity: 0.8; }";
+  html += ".status { margin: 20px; padding: 10px; border-radius: 5px; display: none; }";
+  html += ".status.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }";
+  html += ".status.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }";
+  html += "</style>";
+  html += "</head>";
+  html += "<body>";
+  html += "<h1>Timer Controller</h1>";
+  html += "<div class='timer'><span id='time'>" + String(minutes_left) + "</span></div><p>Minutes Remaining</p>";
+  html += "<div>";
+  html += "<input type='number' id='minutesInput' min='0' max='255' placeholder='Enter minutes'>";
+  html += "<button class='set-button' onclick='setTime()'>Set Timer</button>";
+  html += "</div>";
+  html += "<div>";
+  html += "<button class='reset-button' onclick='resetTime()'>Reset Timer</button>";
+  html += "</div>";
+  html += "<div id='status' class='status'></div>";
+  html += "<script>";
+  html += "function showStatus(message, isSuccess) {";
+  html += "  var statusDiv = document.getElementById('status');";
+  html += "  statusDiv.textContent = message;";
+  html += "  statusDiv.className = 'status ' + (isSuccess ? 'success' : 'error');";
+  html += "  statusDiv.style.display = 'block';";
+  html += "  setTimeout(function() {";
+  html += "    statusDiv.style.display = 'none';";
+  html += "  }, 3000);";
+  html += "}";
+  html += "";
+  html += "function setTime() {";
+  html += "  var minutes = document.getElementById('minutesInput').value;";
+  html += "  if (minutes === '') {";
+  html += "    showStatus('Please enter a value', false);";
+  html += "    return;";
+  html += "  }";
+  html += "  fetch('/setTime?minutes=' + minutes)";
+  html += "    .then(response => {";
+  html += "      if (!response.ok) throw new Error('Network response was not ok');";
+  html += "      return response.text();";
+  html += "    })";
+  html += "    .then(data => {";
+  html += "      document.getElementById('time').innerText = data;";
+  html += "      showStatus('Timer set to ' + data + ' minutes', true);";
+  html += "      document.getElementById('minutesInput').value = '';";
+  html += "    })";
+  html += "    .catch(error => {";
+  html += "      showStatus('Error setting timer: ' + error.message, false);";
+  html += "    });";
+  html += "}";
+  html += "";
+  html += "function resetTime() {";
+  html += "  fetch('/reset')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => {";
+  html += "      document.getElementById('time').innerText = data;";
+  html += "      showStatus('Timer reset to 0 minutes', true);";
+  html += "    })";
+  html += "    .catch(error => {";
+  html += "      showStatus('Error resetting timer: ' + error.message, false);";
+  html += "    });";
+  html += "}";
+  html += "";
+  html += "setInterval(function() {";
+  html += "  fetch('/getTime')";
+  html += "    .then(response => response.text())";
+  html += "    .then(data => {";
+  html += "      document.getElementById('time').innerText = data;";
+  html += "    })";
+  html += "    .catch(error => console.log('Error fetching time:', error));";
+  html += "}, 5000);";
+  html += "</script>";
+  html += "</body>";
+  html += "</html>";
+  return html;
+}
 
-  minutes_left = newMinutes;
-  if (minutes_left > 0) {
-    init_time = millis();
-    digitalWrite(RELAY_OUT_PIN, HIGH);
+void handleRoot() {
+  server.send(200, "text/html", getHtmlPage());
+}
+
+void handleSetTime() {
+  if (server.hasArg("minutes")) {
+    int newMinutes = server.arg("minutes").toInt();
+    
+    // Validate input
+    if (newMinutes < 0) newMinutes = 0;
+    if (newMinutes > 255) newMinutes = 255;
+    
+    minutes_left = (byte)newMinutes;
+    
+    if (minutes_left > 0) {
+      init_time = millis();
+      digitalWrite(RELAY_OUT_PIN, HIGH);
+    } else {
+      digitalWrite(RELAY_OUT_PIN, LOW);
+    }
+    
+    print_save_and_publish(minutes_left);
+    
+    // Return the new value to update the screen immediately
+    server.send(200, "text/plain", String(minutes_left));
+  } else {
+    server.send(400, "text/plain", "Missing minutes parameter");
   }
+}
 
+void handleReset() {
+  minutes_left = 0;
+  digitalWrite(RELAY_OUT_PIN, LOW);
   print_save_and_publish(minutes_left);
+  server.send(200, "text/plain", String(minutes_left));
+}
+
+void handleGetTime() {
+  server.send(200, "text/plain", String(minutes_left));
+}
+
+void handleNotFound() {
+  server.send(404, "text/plain", "Not found");
 }
 
 void wifi_connect() {
@@ -82,34 +194,12 @@ void wifi_connect() {
     Serial.print(" -> WiFi connected\n    + IP assigned: ");
     Serial.print(WiFi.localIP());
     Serial.println("");
+    Serial.print("    + Web server available at: http://");
+    Serial.print(WiFi.localIP());
+    Serial.println("/");
   }
 
   digitalWrite(WIFI_INDICATOR, wifi_connected);
-  digitalWrite(MQTT_INDICATOR, mqtt_connected);
-}
-
-void mqtt_connect() {
-  if (mqtt_connected) {
-    digitalWrite(MQTT_INDICATOR, mqtt_connected);
-    return;
-  } else {
-    Serial.println(" -> Attempting MQTT connection");
-    // Attempt to connect
-    // If you do not want to use a username and password, change next line to
-    if (mqtt_client.connect(DEVICE_ID)) {
-    // if (mqtt_client.connect("ESP8266Client", mqtt_user, mqtt_password)) {
-      Serial.println("    + connected");
-      mqtt_client.subscribe(TIMMER_TOPIC);
-      mqtt_connected = true;
-      print_save_and_publish(minutes_left);
-    } else {
-      Serial.print("    + failed, rc=");
-      Serial.println(mqtt_client.state());
-      mqtt_connected = false;
-    }
-  }
-
-  digitalWrite(MQTT_INDICATOR, mqtt_connected);
 }
 
 void setup() {
@@ -121,7 +211,6 @@ void setup() {
   btn_control.init();
   pinMode(RELAY_OUT_PIN, OUTPUT);
   pinMode(WIFI_INDICATOR, OUTPUT);
-  pinMode(MQTT_INDICATOR, OUTPUT);
 
   minutes_left = EEPROM.read(counter_addr);
   display.showNumberDec(minutes_left);
@@ -132,8 +221,15 @@ void setup() {
 
   wifi_connect();
 
-  mqtt_client.setServer(mqttServer, mqttPort);
-  mqtt_client.setCallback(callback);
+  // Setup web server routes
+  server.on("/", handleRoot);
+  server.on("/setTime", handleSetTime);
+  server.on("/reset", handleReset);
+  server.on("/getTime", handleGetTime);
+  server.onNotFound(handleNotFound);
+  
+  server.begin();
+  Serial.println("Web server started");
 }
 
 void loop() {
@@ -142,25 +238,17 @@ void loop() {
     wifi_connect();
   }
 
-  mqtt_connected = mqtt_client.connected();
-  if (wifi_connected && !mqtt_connected) {
-    mqtt_connect();
-  }
-
   int event = btn_control.handle();
 
   switch(event) {
-    case EV_LONGPRESS: // Reset timmer, in consecuence stops water bomb
+    case EV_LONGPRESS: // Reset timer, consequently stops water pump
       minutes_left = 0x00;
-      
+      digitalWrite(RELAY_OUT_PIN, LOW);
       print_save_and_publish(minutes_left);
-
       break;
-    case EV_SHORTPRESS: // Add x minutes
+    case EV_SHORTPRESS: // Add 2 minutes
       minutes_left += 0x02;
-      
       print_save_and_publish(minutes_left);
-
       digitalWrite(RELAY_OUT_PIN, HIGH);
       init_time = millis();
       break;
@@ -174,24 +262,13 @@ void loop() {
     if (minutes_left > 0x00) {
       minutes_left--;
       init_time = millis();
-
       print_save_and_publish(minutes_left);
-
       digitalWrite(RELAY_OUT_PIN, HIGH);
     }
   }
 
-  // Periodic status updates
-  if (wifi_connected && mqtt_connected) {
-    unsigned long currentMillis = millis();
-    if (currentMillis - lastStatusUpdateTime >= STATUS_UPDATE_INTERVAL) {
-      lastStatusUpdateTime = currentMillis;
-      mqtt_client.publish(STATUS_TOPIC, String(minutes_left).c_str());
-    }
-  }
-
-  // This should be called regularly to allow the client to process incoming messages and maintain its connection to the server.
-  // Important to execute it at the end.
-  mqtt_client.loop();
+  // Handle web server requests
+  server.handleClient();
+  
   delay(DELAY);
 }
